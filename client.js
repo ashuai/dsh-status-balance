@@ -105,8 +105,14 @@ window.__ModuleLoader__.load({
       over365: '>365 天',
       trendHistoryHint: '按近 {n} 日日均降幅 {amount}/天',
       trendTodayHint: '按今日日均降幅 {amount}/天',
+      trendLocalHint: '按本机今日消耗外推（不含其他终端）',
+      sinceSuffix: '（自 {time}）',
       footerUpdated: '更新 {time}',
-      footerSince: '数据自今日 00:00',
+      footerSpendSince: '消耗自 00:00',
+      footerObservedSince: '余额观测自 {time}',
+      footerNoObservation: '余额观测未开始',
+      footerHostMissing: 'Host 未返回今日账本（重启 dsh web 后可用）',
+      balanceObservedHint: '本进程从 {time} 开始观测余额；此前的余额变化无法回溯',
       'code.no-credential': '未配置 API Key',
       'code.upstream-status': '上游接口返回错误',
       'code.network': '网络请求失败',
@@ -145,8 +151,14 @@ window.__ModuleLoader__.load({
       over365: '>365 days',
       trendHistoryHint: 'Based on the last {n} days, avg {amount}/day',
       trendTodayHint: 'Based on today so far, avg {amount}/day',
+      trendLocalHint: 'Extrapolated from this machine\'s spend today (excludes other terminals)',
+      sinceSuffix: ' (since {time})',
       footerUpdated: 'Updated {time}',
-      footerSince: 'Data since 00:00 today',
+      footerSpendSince: 'Spend since 00:00',
+      footerObservedSince: 'Balance observed since {time}',
+      footerNoObservation: 'Balance observation not started',
+      footerHostMissing: 'Host did not return the today ledger (restart dsh web)',
+      balanceObservedHint: 'This process began observing the balance at {time}; earlier changes cannot be recovered',
       'code.no-credential': 'API key is not configured',
       'code.upstream-status': 'The upstream API returned an error',
       'code.network': 'The network request failed',
@@ -662,8 +674,23 @@ window.__ModuleLoader__.load({
         }
       }
 
+      const observedSince = today !== null && typeof today.observedSince === 'number' && today.observedSince > 0
+        ? today.observedSince
+        : null;
+      const observedLate = observedSince !== null && (() => {
+        const start = new Date(observedSince);
+        start.setHours(0, 0, 0, 0);
+        return observedSince - start.getTime() > 5 * 60 * 1000;
+      })();
+
       pushRow(t('todaySpend'), today === null ? '—' : formatMoneyText(today.mySpend, symbol));
-      pushRow(t('todayDecrease'), today === null ? '—' : formatMoneyText(today.balanceDecrease, symbol));
+      pushRow(
+        observedLate
+          ? `${t('todayDecrease')}${t('sinceSuffix', { time: formatTime(observedSince) })}`
+          : t('todayDecrease'),
+        today === null ? '—' : formatMoneyText(today.balanceDecrease, symbol),
+        observedLate ? t('balanceObservedHint', { time: formatTime(observedSince) }) : undefined,
+      );
       if (today !== null && typeof today.difference === 'string' && Number(today.difference) > 0.01) {
         pushRow(t('todayDifferenceLabel'), formatMoneyText(today.difference, symbol));
       }
@@ -690,6 +717,8 @@ window.__ModuleLoader__.load({
         trendHint = t('trendHistoryHint', { n: Math.max(1, days), amount: average });
       } else if (trend !== null && trend.basis === 'today' && average !== null) {
         trendHint = t('trendTodayHint', { amount: average });
+      } else if (trend !== null && trend.basis === 'local' && average !== null) {
+        trendHint = t('trendLocalHint');
       }
       pushRow(t('daysLeft'), daysText, trendHint);
       pushRow(t('currentSlot'), slotText(t, slot, until, prices.timezone));
@@ -701,7 +730,13 @@ window.__ModuleLoader__.load({
       if (snapshot.error !== null && snapshot.error !== undefined) {
         footerLines.push(`${t('error')}: ${errorText(snapshot.error, t)}`);
       }
-      footerLines.push(`${t('footerUpdated', { time: updated })} · ${t('footerSince')} · ${t('refreshHint')}`);
+      if (today === null && snapshot.phase === 'ready') footerLines.push(t('footerHostMissing'));
+      const sinceText = observedSince === null
+        ? t('footerNoObservation')
+        : observedLate
+          ? t('footerObservedSince', { time: formatTime(observedSince) })
+          : t('footerObservedSince', { time: '00:00' });
+      footerLines.push(`${t('footerUpdated', { time: updated })} · ${t('footerSpendSince')} · ${sinceText} · ${t('refreshHint')}`);
 
       const panelStyle = {
         position: 'fixed',

@@ -25,8 +25,8 @@ export const inject = ['webServer', 'credentials', 'sessions', 'sessionPersisten
 
 const DAY_MS = 86400000;
 const HISTORY_MAX = 14;
-const MAX_BACKFILL_SESSIONS = 200;
-const MAX_BACKFILL_EVENTS = 200000;
+const MAX_BACKFILL_SESSIONS = 400;
+const MAX_BACKFILL_EVENTS = 500000;
 const LEDGER_VERSION = 1;
 const DEFAULT_TIMEZONE = 'Asia/Shanghai';
 const BACKFILL_ROUTE_WAIT_MS = 1500;
@@ -806,13 +806,22 @@ export function apply(ctx, config) {
     if (persistence !== null && typeof persistence.list === 'function' && typeof persistence.open === 'function') {
       try {
         const snapshots = await persistence.list();
+        const createdToday = [];
+        const createdYesterday = [];
         for (const snapshot of snapshots) {
           const header = snapshot?.header;
           if (!isPlainObject(header) || typeof header.id !== 'string') continue;
           if (typeof header.createdAt !== 'number' || header.createdAt < dayStart - DAY_MS) continue;
           if (live.has(header.id)) continue;
-          sources.push({ id: header.id, snapshot });
+          const source = { id: header.id, snapshot, createdAt: header.createdAt };
+          // Today's sessions get the event budget first; yesterday-created
+          // sessions that ran across midnight are folded only after them.
+          if (header.createdAt >= dayStart) createdToday.push(source);
+          else createdYesterday.push(source);
         }
+        createdToday.sort((a, b) => b.createdAt - a.createdAt);
+        createdYesterday.sort((a, b) => b.createdAt - a.createdAt);
+        sources.push(...createdToday, ...createdYesterday);
       } catch {
         partial = true;
       }
@@ -946,12 +955,17 @@ export function apply(ctx, config) {
       basis = 'history';
     } else {
       const today = ledger.today;
+      const dayStart = localDayStart(Date.now(), timeZone);
+      const elapsedFraction = Math.min(1, Math.max(0.05, (Date.now() - dayStart) / DAY_MS));
       if (today.firstSeenAt !== null && today.lastSeenAt !== null
         && today.lastSeenAt - today.firstSeenAt >= 3600000 && today.balanceDecreaseUnits > 0) {
-        const dayStart = localDayStart(Date.now(), timeZone);
-        const elapsedFraction = Math.min(1, Math.max(0.05, (Date.now() - dayStart) / DAY_MS));
         average = today.balanceDecreaseUnits / elapsedFraction;
         basis = 'today';
+      } else if (today.mySpendUnits > 0 && elapsedFraction >= 0.1 && today.lastBalance !== null) {
+        // No wallet-decrease history yet. Extrapolate this machine's own
+        // billed spend to a full day; the client labels it as local-only.
+        average = today.mySpendUnits / elapsedFraction;
+        basis = 'local';
       }
     }
     const lastBalance = ledger.today.lastBalance;

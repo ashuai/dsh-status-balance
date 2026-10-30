@@ -190,8 +190,9 @@ Host 默认（per 1M tokens, CNY）：
 ## 13. 限制（诚实声明）
 
 - **我的消耗 vs 余额减少**：前者只含本进程能看到的 own session 事件；后者是钱包读数差，含其它终端、其它密钥、充值。两者不相等时差额行只做提示，不做归因。
-- **观测起点**：Host 启动后第一次成功 fetch 才有 baseline；重启当天早先的余额变化不可见。
-- **backfill 窗口**：只回填 `createdAt >= dayStart - 24h` 的 persisted sessions；更早创建但今天仍在跑的 session 仅在其 live 时才计入（live sessions 全部尝试）。
+- **观测起点**：Host 启动后第一次成功 fetch 才有 baseline；重启当天早先的余额变化不可见。弹层会把实际起点显示为「（自 HH:mm）」，底部同样标注观测起点。
+- **预计可用的本地回退**：既无 history、今日又还没有余额降幅时，用「本机今日消耗 / 已过时长」外推（`basis: local`）；它不含其它终端/密钥，因此偏乐观，tooltip 明示。
+- **backfill 窗口**：只回填 `createdAt >= dayStart - 24h` 的 persisted sessions，优先 live 与当天创建；上限 400 会话 / 50 万事件，超出标记 `truncated/partial`。更早创建、今天跑过但现在不再 live 的 session 不计入。
 - **单进程假设**：ledger 没有跨进程写锁；同一 DSH_HOME 多开 Host 可能互相覆盖。
 - **估算**：spend 是列表价估算，不是账单；中途切 model 时，事件自身若带 source model 则按事件 model，否则按最近 request/context/default。
 - **无 `?session` 细分**：本版未实现 per-session 查询参数，避免路线表与 route 复杂化。
@@ -204,9 +205,10 @@ Host 默认（per 1M tokens, CNY）：
 3. **Rollover**：跨日事件触发 archive + reset；history 出现前一日、today 重置；watermark 保留。
 4. **Balance observation**：100 → 95.50 → 96 得 decrease 4.50 / increase 0.50 / last 96.00 / difference 4.50；首次 baseline。
 5. **Backfill**：persisted session 只计一次；handle close；失败 → partial；201 sessions → truncated partial 且只计 200。
-6. **Persistence**：损坏 JSON 重命名恢复；write 后无 tmp 残留；history 截 14；history/today trend 公式（history avg、today fallback、daysLeft）。
-7. **Degrade**：sessions 缺失时 today/trend 省略，slot/prices 仍在。
-8. **Client popover**：portal 到 body、dialog role、aria-expanded；标题余额、5+ 行、差额为 0 时隐藏、daysLeft 42/>365/—、充值行、slot 文案、footer、错误原因；Escape/外部点击关闭、内部点击不关闭、卸载移除 listener。
-9. **Client pill**：仍恰好 2 个金额、无标签；peak/off 价分别为 ¥10.00/¥5.00；pro peak ¥36.00；点击展开并 `?refresh=1`；sub-cent `¥0.0043`。
-10. **Route**：today/trend/slot 在所有成功/错误 body；`prices` slot-shaped + timezone/peakWindows；`prices` 在 405；数字为 decimal string；无 key 泄漏。
-11. **隔离探针**：真实页面中 pill 在 ContextMeter 后、popover 定位/关闭正常、无 console error；teardown 无残留。
+6. **Persistence**：损坏 JSON 重命名恢复；write 后无 tmp 残留；history 截 14；trend 优先级 history → today → local → none，`local` 由 `mySpend / elapsedFraction` 得出且客户端标注本机口径。
+7. **观测起点标注**：`observedSince` 晚于本地 00:05 时，余额减少行带「（自 HH:mm）」，footer 同步；`today` 缺失时 footer 提示 Host 未提供今日账本。
+8. **Degrade**：sessions 缺失时 today/trend 省略，slot/prices 仍在。
+9. **Client popover**：portal 到 body、dialog role、aria-expanded；标题余额、5+ 行、差额为 0 时隐藏、daysLeft 42/>365/—、充值行、slot 文案、footer、错误原因；Escape/外部点击关闭、内部点击不关闭、卸载移除 listener。
+10. **Client pill**：仍恰好 2 个金额、无标签；peak/off 价分别为 ¥10.00/¥5.00；pro peak ¥36.00；点击展开并 `?refresh=1`；sub-cent `¥0.0043`。
+11. **Route**：today/trend/slot 在所有成功/错误 body；`prices` slot-shaped + timezone/peakWindows；`prices` 在 405；数字为 decimal string；无 key 泄漏。
+12. **隔离探针**：真实页面中 pill 在 ContextMeter 后、popover 定位/关闭正常、无 console error；teardown 无残留。
