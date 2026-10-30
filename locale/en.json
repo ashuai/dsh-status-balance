@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Session Spend & Balance",
+    "description": "Shows this session's estimated spend and the DeepSeek wallet balance beside the composer."
+  }
+}

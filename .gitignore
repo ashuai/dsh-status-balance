@@ -1,0 +1,9 @@
+# 本机参考/探针数据（属于工作区，不进插件仓库）
+.local/
+.probe/
+
+# 构建与运行产物
+node_modules/
+dist/
+*.log
+.DS_Store
