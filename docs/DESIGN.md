@@ -1,4 +1,4 @@
-# dsh-status-balance 方案（Design Record, v2）
+# dsh-status-balance 设计记录（Design Record）
 
 ## 1. 问题与目标
 
@@ -10,7 +10,7 @@ v2 目标：在 composer 下方 dock 行、上下文指示器（`ContextMeter`�
 - 中：`·` 分隔（非标签）；
 - 右：wallet icon + DeepSeek 钱包余额。
 
-参照 Reasonix 的语义：可配置 balance endpoint、切 provider/model 时丢弃旧余额响应。本插件保留「可配置 `balanceUrl` + stale 丢弃」，余额仍由 Host 缓存时间戳与 `stale` 标记控制；spend 则从 session projection 实时推导，两者同一 pill 内展示。
+参照同类工具的做法：可配置 balance endpoint、切 provider/model 时丢弃旧余额响应。本插件保留「可配置 `balanceUrl` + stale 丢弃」，余额仍由 Host 缓存时间戳与 `stale` 标记控制；spend 则从 session projection 实时推导，两者同一 pill 内展示。
 
 ## 2. 归属与上下文
 
@@ -101,7 +101,7 @@ Host 默认（per 1M tokens, CNY）：
 - **整会话单模型计价**：`modelSelection` 只给当前/最近模型；中途切模型时按当前价近似整个会话。
 - **未鉴权的本地 route**：与其它 plugin route 一致，挂在 web server 监听接口上；只返回 display-safe 字段，API key 永不离开 Host。能访问该 server 的人可读余额。
 - **依赖已配置 credential**：未配置时 `no-credential`，余额显示 `—`；spend 仍可算。
-- **无 provider/model 维度**：单一 DeepSeek 账户；Reasonix 的 per-provider 切换丢弃在本插件没有对应物，只有 balance stale 丢弃。
+- **无 provider/model 维度**：单一 DeepSeek 账户；同类工具的 per-provider 切换丢弃在本插件没有对应物，只有 balance stale 丢弃。
 - **pull-based、无历史**：没有 SSE/push、没有余额趋势图。
 - **Projection 缺失**：老客户端没有 `useProjection` 时 spend 显示 `—`，绝不抛错。
 
@@ -124,3 +124,87 @@ Host 默认（per 1M tokens, CNY）：
 6. **Balance 行为**：mount 一次 fetch；同 fetchedAt 的 cache；`?refresh=1` 受 `minRefreshMs` 约束；失败 stale/backoff；hidden 清 timer；visible/focus >30s refetch；unmount abort + 清 listener。
 7. **Route**：200 + JSON + `prices` 在 success/error/stale/405；非 GET 405 + `Allow: GET`；响应与日志无 key。
 8. **隔离探针**：页面中 pill 位于 ContextMeter 之后（computed flex order / DOM 位置），无 console/page error；teardown 无残留进程与端口。
+
+---
+
+# v3 增量：popover + 今日账本 + 峰谷计价
+
+> 本节覆盖 v2 的价格表与测试锚点 3 中「flash 1/0.02/2、pro 3/0.025/6」的描述；v2 的 pill seat、无标签、余额缓存策略继续有效。
+
+## 8. 问题与目标
+
+用户点击 pill 应看到明细，并追问「峰谷价有没有算」。v3 的回答：
+
+- pill 继续只显示 2 个金额，但把会话 spend 改为**按当前时段**（高峰/谷时）计价；
+- 点击 pill 打开 popover：今日我的消耗、今日余额减少、差额、充值、预计可用、当前时段；
+- Host 侧新增**本机日账本**：从 session 事件累计消耗，从余额观测累计减少，按本地日滚动；
+- 峰谷价由 `Asia/Shanghai` 时区与可配置窗口决定，事件按 `event.time` 所属时段计价。
+
+## 9. Popover 设计理由
+
+- 触发：pill 改为真实 `<button type="button">`，`aria-haspopup="dialog"` / `aria-expanded`；点击展开并入队一次 balance 强制刷新。
+- 面板：`react-dom.createPortal(panel, document.body)`，`position:fixed; z-index:1100`，`max-content` 宽度、300–440px 夹取；只在打开时挂载。
+- 定位：以 pill `getBoundingClientRect()` 为锚，面板放上方 gap 8；上方空间不足则放下方；左右 `clamp(右对齐, 12, vw-12-width)`；`resize` 与捕获阶段 `scroll` 重测。
+- 关闭：外部 `pointerdown`/`click`（capture）与 `Escape`；点击面板内部不关闭；Escape 后焦点回 pill；卸载移除全部 listener。
+- 内容布局：标题行（wallet icon + 标题 + 当前余额）+ 细线 + `dl` 两列 grid（label/value）+ 细线 + 11px footer。行内 label 允许出现（pill 仍无标签）。
+- 差额只在 `>¥0.01` 时出现，label 明示「其他终端/密钥」；充值单独一行 `+¥x`。
+- loading/error 时行值显示 `—`，footer 保留错误原因；面板照常可开。
+
+## 10. Ledger 状态机
+
+持久化：`$DSH_HOME/.dsh-status-balance.json`（无 `DSH_HOME` 时 `~/.dsh`），`version: 1`，金额单位 ¥0.0001 整数。
+
+```json
+{ "version":1, "day":"YYYY-MM-DD",
+  "today": { "mySpendUnits":0, "balanceDecreaseUnits":0, "balanceIncreaseUnits":0,
+             "firstBalance":null, "lastBalance":null, "firstSeenAt":null, "lastSeenAt":null },
+  "sessions": { "<sessionId>": { "seq": 12 } },
+  "history": [ { "day":"...", "mySpendUnits":12345, "balanceDecreaseUnits":23456 } ],
+  "backfill": { "day":"...", "status":"pending|done|partial", "truncated":false } }
+```
+
+- **Live fold**：`session/event` → `assistant/message.usage`，否则扫 `assistant/attempt`/`assistant/message` stream 的最后一个 `chunk.type==='usage'`。`isOwnSeq` 为 false（fork inherited）跳过；`event.seq <= watermark` 跳过；计数后把 watermark 推到该 seq。model 取 assistant message `source.model`，attempt 用该 session 最近的 `request/context.model`，都没有则 default 价。
+- **日边界**：`event.time` 的本地日 > ledger.day → archive + reset；< 则忽略（防时钟回拨倒退）。archive 推 `{day, mySpendUnits, balanceDecreaseUnits}` 进 history，history 截到 14 条。新日 `firstBalance/lastBalance = 旧 lastBalance`，`firstSeenAt/lastSeenAt = null`；sessions watermark **保留**（全局防重）；backfill 重置为 pending。
+- **Backfill**：每日一次。live sessions（全部）+ persisted sessions（`header.createdAt >= dayStart - 24h`），live 优先；own 判定 live 用 `isOwnSeq`，persisted 用 `handle.inheritedEventCount`；`handle.read()` 后必须 `close()`。上限 200 session / 200000 event；命中上限或单 session 异常 → `truncated=true` / `status='partial'`。route 首次命中最多等 1.5s，随后后台继续；`today.backfill` 暴露状态。
+- **Balance observation**：仅在上游 fetch 成功且解析出余额时；取 CNY wallet（否则第一个）。当日首次设 baseline；之后下降累加 decrease、上升累加 increase；更新 lastBalance/lastSeenAt。重启后从本进程首次观测开始，不追溯之前。
+- **持久化**：tmp + rename 原子写，debounce ~2s；损坏 JSON 重命名为 `.corrupt-<ts>` 后新建，加载永不 throw；history load/save 均截 14。
+- **单写者假设**：同一 DSH_HOME 只应有一个 Host 进程；多进程并发写没有锁（见限制）。
+
+## 11. 峰谷计价
+
+- 时区默认 `Asia/Shanghai`；周一至周五 `[9,12)`、`[14,18)` 为 peak；周末与其余时段 offpeak（`weekendOffPeak` 可关）。
+- 判断来自 `Intl.DateTimeFormat.formatToParts` 的本地 hour/weekday；`nextSlotBoundary` 从窗口边界（0/9/12/14/18）向后扫描最多 8 天，找到第一个状态变化点。
+- 价格表 slot-shaped：`{ off:{input,cacheHit,output[,cacheWrite]}, peak:{...} }`；flat `{input,cacheHit,output}` 兼容为两 slot 同价；`config.prices` 深度合并。
+- Host 的 ledger 用 `event.time` 选 slot 计价；客户端 pill 用 `Date.now()` 选当前 slot；同一事件在 popover 的 `mySpend` 与 pill 的 `sessionSpend` 可能因时段变化/是否含历史事件而不同，这是预期。
+- 公式：`(uncached*input + cacheRead*cacheHit + cacheWrite*(cacheWriteUsesInput?input:cacheWrite) + output*output) / 1e6`；整数 nano-yuan/BigInt 计算，避免浮点尾差。
+
+## 12. Trend 公式
+
+- `avgDailyDecrease`：history 最后 ≤7 条 `balanceDecreaseUnits > 0` 的均值（basis `history`）。
+- 无 history 时 fallback：今日 `lastSeenAt - firstSeenAt >= 1h` 且 decrease > 0 → `decrease / max(0.05, (now - dayStart)/24h)`（basis `today`）。
+- `daysLeft = floor(lastBalanceUnits / avg)`；无 avg / avg<=0 → null；客户端显示 `>365` 或 `—`。
+- `trend.days` = history 最后 7 条 `{date, decrease}`；tooltip 给出 N 与日均。
+
+## 13. 限制（诚实声明）
+
+- **我的消耗 vs 余额减少**：前者只含本进程能看到的 own session 事件；后者是钱包读数差，含其它终端、其它密钥、充值。两者不相等时差额行只做提示，不做归因。
+- **观测起点**：Host 启动后第一次成功 fetch 才有 baseline；重启当天早先的余额变化不可见。
+- **backfill 窗口**：只回填 `createdAt >= dayStart - 24h` 的 persisted sessions；更早创建但今天仍在跑的 session 仅在其 live 时才计入（live sessions 全部尝试）。
+- **单进程假设**：ledger 没有跨进程写锁；同一 DSH_HOME 多开 Host 可能互相覆盖。
+- **估算**：spend 是列表价估算，不是账单；中途切 model 时，事件自身若带 source model 则按事件 model，否则按最近 request/context/default。
+- **无 `?session` 细分**：本版未实现 per-session 查询参数，避免路线表与 route 复杂化。
+- **仍无鉴权**：route 与其它 plugin route 一样挂在 web server 监听接口上；只返回 display-safe 数据。
+
+## 14. 测试锚点（v3）
+
+1. **Host live**：peak flash 1M input+1M output = ¥10；off 同量 = ¥5；pro peak input 1M = ¥9；重复事件 seq 只计一次；fork inherited 跳过；attempt stream usage 用最近 request/context 的 model。
+2. **Host slots**：Fri 10:00 peak、Fri 13:00 offpeak、Sat 10:00 offpeak；peak until 12:00，offpeak until 14:00，weekend until Monday 09:00。
+3. **Rollover**：跨日事件触发 archive + reset；history 出现前一日、today 重置；watermark 保留。
+4. **Balance observation**：100 → 95.50 → 96 得 decrease 4.50 / increase 0.50 / last 96.00 / difference 4.50；首次 baseline。
+5. **Backfill**：persisted session 只计一次；handle close；失败 → partial；201 sessions → truncated partial 且只计 200。
+6. **Persistence**：损坏 JSON 重命名恢复；write 后无 tmp 残留；history 截 14；history/today trend 公式（history avg、today fallback、daysLeft）。
+7. **Degrade**：sessions 缺失时 today/trend 省略，slot/prices 仍在。
+8. **Client popover**：portal 到 body、dialog role、aria-expanded；标题余额、5+ 行、差额为 0 时隐藏、daysLeft 42/>365/—、充值行、slot 文案、footer、错误原因；Escape/外部点击关闭、内部点击不关闭、卸载移除 listener。
+9. **Client pill**：仍恰好 2 个金额、无标签；peak/off 价分别为 ¥10.00/¥5.00；pro peak ¥36.00；点击展开并 `?refresh=1`；sub-cent `¥0.0043`。
+10. **Route**：today/trend/slot 在所有成功/错误 body；`prices` slot-shaped + timezone/peakWindows；`prices` 在 405；数字为 decimal string；无 key 泄漏。
+11. **隔离探针**：真实页面中 pill 在 ContextMeter 后、popover 定位/关闭正常、无 console error；teardown 无残留。

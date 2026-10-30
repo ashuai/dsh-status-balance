@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Session Spend & Balance",
-    "description": "Shows this session's estimated spend and the DeepSeek wallet balance beside the composer."
+    "description": "Shows session spend (peak/off-peak estimate) and the DeepSeek wallet balance beside the composer; click for today's ledger and runway."
   }
 }

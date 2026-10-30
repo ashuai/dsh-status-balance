@@ -1,8 +1,21 @@
 {
   "name": "dsh-status-balance",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
+  "description": "Minimal DeepSeek balance + session spend pill for the DeepSeek Harness Web UI, with a click-to-open today ledger.",
+  "license": "MIT",
+  "author": "ashuai",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/ashuai/dsh-status-balance.git"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "balance"
+  ],
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
@@ -16,7 +29,9 @@
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "docs/DESIGN.md"
   ],
   "dsh": {
     "bundle": {

@@ -1,150 +1,130 @@
 # dsh-status-balance
 
-A DeepSeek Harness Web UI plugin that shows two amounts beside the composer: this session's estimated spend and the DeepSeek account's wallet balance. The numbers carry no text labels — two small icons tell them apart.
+在 DeepSeek Harness Web UI 的输入框下方显示两个数字：**本会话花费**和**钱包余额**。点一下展开今日账本、可用天数和当前峰谷时段。
 
-## Where it renders
-
-- Claims one entry in `conversation.composer.dock` (list, session scope): `id: balance`, `order: 100`.
-- The root pill also sets inline `order: 100` / `flex: none`, so in the dock's flex row it renders after the context meter. The context meter is a sibling of the slot outlet in that row (not a slot itself), so flex order, not registration order alone, places the pill after it.
-- Pill geometry: inline-flex, 22px high, 12px text, tabular numerals, 6px gap, 6px radius, `--dsw-alias-label-secondary` text, transparent background and a `--dsw-alias-interactive-bg-hover` hover. No visible text labels; a tertiary `·` separates the two amounts.
-- Icons are 14×14 inline SVGs in `currentColor`: an outflow glyph (arrow leaving a box) for spend and a wallet glyph for balance.
-- Tooltip and `aria-label` carry the details: spend estimate, token breakdown, the unit prices actually used, the balance breakdown, update time, stale/error reason, and the refresh hint. Clicking the pill asks the Host for a forced balance refresh.
-
-## The two amounts
-
-### Session spend (estimate)
-
-Derived reactively from the session projections — no polling and no timers:
-
-- `useProjection('tokenUsage')` supplies `uncachedInputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `outputTokens`. Both the wire shape (`{ totals, last }`) and the flat shape are accepted.
-- `useProjection('modelSelection')` supplies `next.model` (falling back to `lastUsed.model`) to pick the price row.
-
-Formula, with prices per 1M tokens:
+它是为「不打扰」设计的：一行、无文字标签、无动画、无声音、无通知、不参与对话。
 
 ```
-(uncachedInput * input
- + cacheRead   * cacheHit
- + cacheWrite  * (cacheWriteUsesInput ? input : cacheWrite)
- + output      * output) / 1_000_000
+[↗ ¥0.0043] · [👛 ¥6,053.41]        ← 输入框下、上下文指示器之后
 ```
 
-Display rules: zero shows `¥0.00`; a positive amount below 0.01 keeps four decimals (`¥0.0043`); larger amounts keep at least two decimals and up to four meaningful ones, so `¥3.02`, `¥1.24`, and `¥9.025` all stay precise. The currency symbol comes from the price table.
+## 为什么这么小
 
-DeepSeek does not return a per-request cost, so this is an estimate from list prices; the tooltip says so. Mid-session model switches are priced at the current selection for the whole session (an approximation).
+- **零依赖、零构建**：两个 JS 文件（Host + 浏览器），源码约 86 KB，没有 npm 依赖，没有编译步骤。
+- **不花 token**：不注册工具、不注入 system prompt、不发起额外模型请求。插件不进入对话链路。
+- **不占注意力**：一行 22px 的 pill，两个金额，两个小图标。详情只在你点击时出现。
+- **按需请求**：页面可见时 60 秒轮询一次；页面隐藏不请求。Host 侧 30 秒缓存、单飞、失败退避。
+- **key 不出 Host**：API key 只在 Host 进程解析和使用；浏览器只拿到展示用的字符串。
+- **数据最少**：一个本地 JSON 账本，只存金额、token 数和 session id；不存 prompt、消息、工具输出。
 
-### Wallet balance
+对比常见的「桌面挂件」方向（角色、音效、气泡、多厂商、订阅额度、Codex 统计），这里刻意只做一件事：让余额和本机消耗一眼可见。
 
-Fetched from the Host route. Formatting mirrors the shipped account settings UI: grouped thousands, two decimals, `<¥0.01` for a positive sub-cent, `-¥0.01` clamped magnitude for a tiny negative, `¥0.00` for zero; `¥` for CNY, `$` for USD, otherwise the currency code; multiple wallets join with ` / `.
+## 两个数字
 
-## Price table
+| pill | 含义 |
+| --- | --- |
+| 左（流出图标） | 本会话消耗：`tokenUsage` 投影 × 当前峰谷价，随投影实时刷新，不轮询 |
+| 右（钱包图标） | 钱包余额：Host 同源 route，60 秒可见轮询 |
 
-Default list prices per 1M tokens (CNY):
+## 点开之后
 
-| model | input | cache hit | output |
-| --- | --- | --- | --- |
-| `deepseek-flash` | 1 | 0.02 | 2 |
-| `deepseek-v4-flash` | 1 | 0.02 | 2 |
-| `deepseek-v4-flash-1017` | 1 | 0.02 | 2 |
-| `deepseek-v4-pro` | 3 | 0.025 | 6 |
-| `deepseek-v4-pro-0813` | 3 | 0.025 | 6 |
-| default row | 1 | 0.02 | 2 |
+| 行 | 含义 |
+| --- | --- |
+| 账户余额 | 当前钱包总余额 |
+| 充值余额 / 赠送余额 | 两者都非零时合并展示，都为零时隐藏 |
+| 今日我的消耗 | 本进程按事件时间、峰谷价计算的今日 usage 花费；fork 继承的事件不重复计 |
+| 今日余额减少 | 本进程观测到的钱包下降总额；含其他终端、其他会话、其他 key |
+| 今日差额 | `余额减少 - 我的消耗`，大于 ¥0.01 才显示；提示「钱被别处花了」 |
+| 今日充值 | 观测到的钱包上升，非零时显示 |
+| 预计可用 | `余额 / 近期日均降幅`，显示 `≈ N 天` / `>365 天` / `—` |
+| 当前时段 | 高峰价 / 谷时价，以及下一次切换时间 |
+| 底部 | 更新时间、今日统计起点、错误原因、点击刷新 |
 
-Override the whole table through the patch row's `config.prices`. Scalars (`currency`, `symbol`, `perMillion`, `cacheWriteUsesInput`) override; model rows merge field-by-field; unknown model ids join the table; missing or invalid fields keep their defaults. `cacheWriteUsesInput` (default `true`) prices cache writes at the input rate; otherwise the row's `cacheWrite` price is used.
+两个「今日」数字口径不同，这是刻意的：**我的消耗**回答「我花了多少」，**余额减少**回答「账户少了多少」，差额是发现其他终端/密钥在消耗的线索，不是精确归因。
 
-The Host includes the merged table in every response. The browser also bundles the same defaults as a fallback, so spend stays computable when a payload predates the price table or the route is unreachable.
+## 峰谷价
 
-## Host configuration
+默认按 DeepSeek 官方价（CNY / 百万 tokens）；工作日 `09:00–12:00`、`14:00–18:00`（`Asia/Shanghai`）为高峰，其余与周末为谷时。价格表可用 `config.prices` 覆盖。
 
-All keys are optional and live in the patch row under `config`:
-
-| Key | Default | Meaning |
+| 模型 | 谷时 输入 / 缓存命中 / 输出 | 高峰 输入 / 缓存命中 / 输出 |
 | --- | --- | --- |
-| `routePath` | `/plugin/dsh-status-balance` | Same-origin GET route the browser calls. |
-| `apiKeyRef` | `DEEPSEEK_API_KEY` | Credential reference resolved through `ctx.credentials`. |
-| `balanceUrl` | `https://api.deepseek.com/user/balance` | Upstream balance endpoint. |
-| `cacheTtlMs` | `30000` | A cached success younger than this is served without a fetch. |
-| `failureBackoffMs` | `15000` | After a failure, non-forced requests skip the network for this long. |
-| `staleMaxMs` | `300000` | Last success may still be served as stale data up to this age. |
-| `timeoutMs` | `8000` | Upstream fetch timeout. |
-| `minRefreshMs` | `10000` | Floor between two fetches, including `?refresh=1`. |
-| `prices` | see above | List-price table used by the browser for the spend estimate. |
+| `deepseek-flash` 等 flash 系 | 1 / 0.02 / 4 | 2 / 0.04 / 8 |
+| `deepseek-v4-pro` 等 pro 系 | 4.5 / 0.15 / 13.5 | 9 / 0.3 / 27 |
 
-## Response contract
+计算方法：`(未缓存输入×输入价 + 缓存命中×命中价 + 缓存写入×写入价 + 输出×输出价) / 1_000_000`。DeepSeek 不返回单次调用成本，所以这是按标价的估算，不是账单。
 
-The route is a plain same-origin HTTP endpoint. The API key never appears in a response.
+## 更新策略
 
-Success (HTTP 200):
+| 场景 | 行为 |
+| --- | --- |
+| 页面打开 | 拉一次余额；会话消耗由投影实时驱动 |
+| 页面可见 | 每 60 秒拉一次余额 |
+| 页面隐藏 | 停止轮询，保留最后值 |
+| 回到前台 / focus | 数据超过 30 秒才重拉 |
+| 请求失败 | 30 → 60 → 120 秒退避，成功即重置 |
+| 点击 pill | 打开详情并强制刷新余额（Host 端 10 秒下限） |
+| Host 缓存 | 30 秒内复用；失败时 5 分钟内保留旧值并标记 stale |
 
-```json
-{
-  "ok": true,
-  "fetchedAt": 1761744000000,
-  "stale": false,
-  "isAvailable": true,
-  "balances": [
-    { "currency": "CNY", "total": "1234.56", "granted": "0.00", "toppedUp": "1234.56" }
-  ],
-  "provider": "api.deepseek.com",
-  "prices": {
-    "currency": "CNY", "symbol": "¥", "perMillion": true, "cacheWriteUsesInput": true,
-    "models": {
-      "deepseek-flash": { "input": 1, "cacheHit": 0.02, "output": 2 },
-      "deepseek-v4-pro": { "input": 3, "cacheHit": 0.025, "output": 6 }
-    },
-    "default": { "input": 1, "cacheHit": 0.02, "output": 2 }
-  }
-}
+## 安装
+
+需要带 Web UI 的 DSH profile（`composer.dock`、`tokenUsage` / `modelSelection` 投影存在时可用）。
+
+```bash
+# 本地目录
+dsh plugin --profile web add link:/absolute/path/to/dsh-status-balance
+
+# 或从 GitHub
+dsh plugin --profile web add github:ashuai/dsh-status-balance
 ```
 
-Failure (HTTP 200 with `ok: false`) always carries `prices`; when a success younger than `staleMaxMs` exists, it also carries the last snapshot:
+安装后重启 `dsh web`（Host 半需要重启；只改浏览器半则刷新页面即可）。卸载：`dsh plugin --profile web remove dsh-status-balance`。
 
-```json
-{
-  "ok": false,
-  "code": "network",
-  "message": "upstream request failed",
-  "prices": { "...": "..." },
-  "fetchedAt": 1761744000000,
-  "stale": true,
-  "isAvailable": true,
-  "balances": [ { "currency": "CNY", "total": "1234.56", "granted": "0.00", "toppedUp": "1234.56" } ],
-  "provider": "api.deepseek.com"
-}
+## 配置
+
+所有键可选，写在 profile patch 该行的 `config` 下。
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `balanceUrl` | `https://api.deepseek.com/user/balance` | 余额接口 |
+| `apiKeyRef` | `DEEPSEEK_API_KEY` | 凭据引用 |
+| `routePath` | `/plugin/dsh-status-balance` | 同源 GET 路由 |
+| `cacheTtlMs` | `30000` | 成功缓存时长 |
+| `failureBackoffMs` | `15000` | 失败后的免请求窗口 |
+| `staleMaxMs` | `300000` | 旧值最长保留时间 |
+| `timeoutMs` | `8000` | 上游超时 |
+| `minRefreshMs` | `10000` | 强制刷新下限 |
+| `prices` | 见上 | `timezone`、`peakWindows`、`weekendOffPeak`、`models`、`default`；兼容扁平行 |
+
+## 数据与隐私
+
+- 账本：`$DSH_HOME/.dsh-status-balance.json`（未设置时 `~/.dsh`），整数「¥0.0001」单位，14 天历史，原子写 + 2 秒去抖。损坏时改名 `.corrupt-<ts>` 后重建，不阻塞。
+- Host 只向外提供：余额字符串、时间戳、上游主机名、价格表、聚合金额、错误代码。
+- 路由：同源、仅 GET、`Cache-Control: no-store`，不加 CORS、不记请求日志。
+- 不含 API key、不含会话内容。
+
+## 边界（已知且刻意）
+
+- **估算不是账单**：DeepSeek 不返回单次成本；金额按标价算，折扣/赠送/计费差异不会体现。
+- **余额减少依赖观测**：从本进程当天第一次成功请求开始累计；重启前当天的变化不可回溯。
+- **回填有窗口**：只回填当天、创建时间在 24 小时内、最多 200 个会话 / 20 万条事件；超出标记 `partial`。
+- **单进程假设**：两个 Host 进程共享同一 `DSH_HOME` 时账本会互相覆盖（无跨进程锁）。
+- **路由无鉴权**：与其它插件路由一致，只返回展示字段；服务监听在哪个网卡上，它就在哪里可达。
+- **不做**：多厂商、订阅额度、通知/音效/动画、桌面悬浮挂件、历史趋势图、其它 provider 的余额。
+
+## 开发
+
+```
+index.js      Host：余额 route、缓存、账本、峰谷价、趋势
+client.js     浏览器：pill、详情弹层、投影读取、轮询
+cordis.patch.yml  bundle 挂载
+locale/       插件管理器的标题/描述
+docs/DESIGN.md    设计记录（数据模型、状态机、取舍、测试锚点）
 ```
 
-Codes: `no-credential`, `upstream-status` (adds `status`), `network`, `parse`, `internal`, `method-not-allowed`. Non-GET requests get HTTP 405 with `Allow: GET`, also carrying `prices`.
+无构建步骤。改 `client.js` 刷新页面即生效；改 `index.js` 需要重启 `dsh web`。语法检查：`node --check index.js && node --check client.js`。
 
-Errors use HTTP 200 with an `ok` discriminant because the HTTP call to the Host succeeded; the failure belongs to the upstream lookup and the page renders it as a state. Every response is `Content-Type: application/json; charset=utf-8` and `Cache-Control: no-store`.
+离线断言 109 条（账本状态机、峰谷边界、回填去重、弹层渲染与关闭、格式化）；Host 路由在隔离 DSH profile 中验证。
 
-### Cache and failure semantics
+## License
 
-- A success is cached for `cacheTtlMs`. Concurrent requests share one in-flight upstream call (single-flight).
-- A failure starts `failureBackoffMs`: non-forced requests answer immediately from the last success (marked stale) or from the failure.
-- The last success stays servable for `staleMaxMs`; past that it is dropped from responses.
-- `?refresh=1` bypasses the cache TTL but not `minRefreshMs`.
-- The credential is re-resolved on every fetch, so rotating it needs no restart.
-
-## Balance update strategy
-
-- Fetch once on mount.
-- Poll every 60s, only while `document.visibilityState === 'visible'`.
-- On `visibilitychange` back to visible, and on window `focus`, refetch only when the last data is older than 30s.
-- On error, back off 30s → 60s → 120s (reset on success). No polling while hidden.
-- Clicking the pill requests `?refresh=1`; the Host floor still applies. A click during an in-flight fetch is queued once.
-- In-flight fetches are aborted and timers/listeners are removed on unmount. A 15s client watchdog prevents a permanently pending request.
-
-Spend has no timer and no request: the projection hooks re-render the pill when the session's token totals change.
-
-## Install
-
-The package is a bundle: `dsh.bundle.patch` points at `cordis.patch.yml`, which inserts the Host row, and `dsh.client` points the Web page at the browser module. It has no dependencies or peer dependencies; packages shipped with the harness resolve from the harness installation.
-
-Install it as a profile bundle through the plugin manager's `install_bundle` action (pass this package directory), or add the same patch row to a profile composition. A page reload (or the manager's activation path) makes the client module live. The locale JSON files supply the plugin-manager title/description; `icon.svg` is the row icon.
-
-## Security notes
-
-- The API key is resolved and used only inside the Host process. The browser receives currency codes and balance strings, timestamps, the endpoint host, list prices, and short error text — never the credential or raw upstream bodies.
-- Session spend is computed in the browser from session projections; no token counts or spend are sent to the Host by this plugin.
-- The route is same-origin, GET-only, and `no-store`. There is deliberately no wildcard CORS header, so other origins cannot read it with a browser.
-- Like other plugin routes, the endpoint is served on whatever interface the harness web server listens on. Anyone who can reach that server can read the balance fields; bind the server to localhost when that matters.
-- The route does not log requests, responses, or credentials.
+MIT
